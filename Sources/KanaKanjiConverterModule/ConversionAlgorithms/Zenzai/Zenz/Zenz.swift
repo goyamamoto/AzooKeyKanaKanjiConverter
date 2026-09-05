@@ -121,6 +121,16 @@ package final class Zenz {
         }
     }
 
+    /// The log-probability the model gives `input` itself after `leftSideContext` (see `ZenzInputLikelihood`)
+    func inputLogProbability(_ input: String, leftSideContext: String) -> Float? {
+        self.inferenceLock.withLock {
+            guard let zenzContext else {
+                return nil
+            }
+            return ZenzInputLikelihood.logProbability(context: zenzContext, input: input, leftSideContext: leftSideContext)
+        }
+    }
+
     package func pureGreedyDecoding(pureInput: String, maxCount: Int = .max) -> String {
         self.inferenceLock.withLock {
             guard let zenzContext else {
