@@ -52,8 +52,9 @@ public struct ConvertRequestOptions: Sendable {
     ///   - specialCandidateProviders: 特殊変換を実施する変換関数を挿入します
     ///   - experimentalZenzaiPredictiveInput: Zenzai の予測入力フォールバックを有効にします（experimental）。
     ///   - typoCorrectionMode: 通常の変換リクエストで classic typo correction をどう扱うかを指定します。
+    ///   - supplementaryDictionaryURL: 内蔵辞書にない語を補う辞書（`supplement.louds` などを置いたディレクトリ）を指定します。
     ///   - metadata: メタデータを指定します。詳しくは`ConvertRequestOptions.Metadata`を参照してください。
-    public init(N_best: Int = 10, requireJapanesePrediction: PredictionMode, requireEnglishPrediction: PredictionMode, keyboardLanguage: KeyboardLanguage, englishCandidateInRoman2KanaInput: Bool = false, fullWidthRomanCandidate: Bool = false, halfWidthKanaCandidate: Bool = false, learningType: LearningType, maxMemoryCount: Int = 65536, shouldResetMemory: Bool = false, memoryDirectoryURL: URL, sharedContainerURL: URL, textReplacer: TextReplacer, specialCandidateProviders: [any SpecialCandidateProvider]?, zenzaiMode: ZenzaiMode = .off, preloadDictionary: Bool = false, experimentalZenzaiPredictiveInput: Bool = false, typoCorrectionMode: TypoCorrectionMode = .automatic, metadata: ConvertRequestOptions.Metadata?) {
+    public init(N_best: Int = 10, requireJapanesePrediction: PredictionMode, requireEnglishPrediction: PredictionMode, keyboardLanguage: KeyboardLanguage, englishCandidateInRoman2KanaInput: Bool = false, fullWidthRomanCandidate: Bool = false, halfWidthKanaCandidate: Bool = false, learningType: LearningType, maxMemoryCount: Int = 65536, shouldResetMemory: Bool = false, memoryDirectoryURL: URL, sharedContainerURL: URL, textReplacer: TextReplacer, specialCandidateProviders: [any SpecialCandidateProvider]?, zenzaiMode: ZenzaiMode = .off, preloadDictionary: Bool = false, experimentalZenzaiPredictiveInput: Bool = false, typoCorrectionMode: TypoCorrectionMode = .automatic, supplementaryDictionaryURL: URL? = nil, metadata: ConvertRequestOptions.Metadata?) {
         self.N_best = N_best
         self.requireJapanesePrediction = requireJapanesePrediction
         self.requireEnglishPrediction = requireEnglishPrediction
@@ -73,6 +74,7 @@ public struct ConvertRequestOptions: Sendable {
         self.preloadDictionary = preloadDictionary
         self.experimentalZenzaiPredictiveInput = experimentalZenzaiPredictiveInput
         self.typoCorrectionMode = typoCorrectionMode
+        self.supplementaryDictionaryURL = supplementaryDictionaryURL
 
         if shouldResetMemory {
             print("Warning: Passing `shouldResetMemory: true` in `ConvertRequestOptions` is deprecated. Use `KanaKanjiConverter.resetMemory` instead.")
@@ -95,6 +97,7 @@ public struct ConvertRequestOptions: Sendable {
     // ディレクトリなど
     public var memoryDirectoryURL: URL
     public var sharedContainerURL: URL
+    public var supplementaryDictionaryURL: URL?
     /// providers to generate "special" candidates such as Unicode conversion.
     public var specialCandidateProviders: [any SpecialCandidateProvider]
     public var zenzaiMode: ZenzaiMode
@@ -230,6 +233,21 @@ public struct ConvertRequestOptions: Sendable {
             var baseNgramLanguageModel: String
             var personalNgramLanguageModel: String
         }
+        /// A second model that scores the candidates a thorough conversion chose among (see `Kana2Kanji.all_zenzai`): a
+        /// candidate the second model prefers to the conversion model's choice by at least `threshold` (in log-probability)
+        /// is weighed against it by the sum of the two log-probabilities, the second's times `weight`. Where the two
+        /// models' choices differ, the second is right when it is sure, and wrong when it is only somewhat surer
+        public struct SecondOpinion: Sendable, Equatable {
+            public init(weightURL: URL, weight: Float = 0.5, threshold: Float = 4) {
+                self.weightURL = weightURL
+                self.weight = weight
+                self.threshold = threshold
+            }
+
+            var weightURL: URL
+            var weight: Float
+            var threshold: Float
+        }
         public static let off = ZenzaiMode(
             enabled: false,
             weightURL: URL(fileURLWithPath: ""),
@@ -245,12 +263,15 @@ public struct ConvertRequestOptions: Sendable {
         ///    - requestRichCandidates: when this flag is true, the converter spends more time but generate richer N-Best candidates for candidate list view. Usually this option is not recommended for live conversion.
         ///    - personalizationMode: values for personalization.
         ///    - versionDependentMode: specify zenz model version and its configuration.
-        public static func on(weight: URL, inferenceLimit: Int = 10, requestRichCandidates: Bool = false, personalizationMode: PersonalizationMode?, versionDependentMode: ZenzaiVersionDependentMode = .v3(.init())) -> Self {
+        ///    - thorough: when this flag is true, the conversion is for committing: it starts over from the dictionary's conversion, weighs the model's other readings and the word it would go on with, and takes the most probable. Slower than live conversion.
+        public static func on(weight: URL, inferenceLimit: Int = 10, requestRichCandidates: Bool = false, thorough: Bool = false, secondOpinion: SecondOpinion? = nil, personalizationMode: PersonalizationMode?, versionDependentMode: ZenzaiVersionDependentMode = .v3(.init())) -> Self {
             ZenzaiMode(
                 enabled: true,
                 weightURL: weight,
                 inferenceLimit: inferenceLimit,
                 requestRichCandidates: requestRichCandidates,
+                thorough: thorough,
+                secondOpinion: secondOpinion,
                 personalizationMode: personalizationMode,
                 versionDependentMode: versionDependentMode
             )
@@ -259,6 +280,8 @@ public struct ConvertRequestOptions: Sendable {
         var weightURL: URL
         var inferenceLimit: Int
         var requestRichCandidates: Bool
+        var thorough: Bool = false
+        var secondOpinion: SecondOpinion?
         var personalizationMode: PersonalizationMode?
         var versionDependentMode: ZenzaiVersionDependentMode
     }

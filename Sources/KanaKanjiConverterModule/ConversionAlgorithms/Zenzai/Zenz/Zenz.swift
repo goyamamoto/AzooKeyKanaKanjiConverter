@@ -26,6 +26,14 @@ private final class SharedZenzCache: @unchecked Sendable {
         }
     }
 
+    /// Makes `zenz` the cached model, so the cache lets go of the one it held: a converter that takes a model it already
+    /// holds does not go through `zenz(resourceURL:)`
+    func remember(_ zenz: Zenz) {
+        self.lock.withLock {
+            self.cache.setObject(zenz, forKey: zenz.resourceURL.absoluteString as NSString)
+        }
+    }
+
     private let cache = NSCache<NSString, Zenz>()
     private let lock = NSLock()
 }
@@ -37,6 +45,11 @@ package final class Zenz {
 
     package static func shared(resourceURL: URL) throws -> Zenz {
         try SharedZenzCache.shared.zenz(resourceURL: resourceURL)
+    }
+
+    /// Makes this model the one the process shares (see `shared(resourceURL:)`), in place of the one shared before
+    package func share() {
+        SharedZenzCache.shared.remember(self)
     }
 
     init(resourceURL: URL) throws {

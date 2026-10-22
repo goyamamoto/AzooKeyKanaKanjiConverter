@@ -302,14 +302,49 @@ private final class SharedZenzModel {
         }
         self.model = model
         self.vocab = vocab
+        self.attentionPrecision = ZenzAttentionPrecision(
+            metadataValue: Self.metadataValue(model, key: ZenzAttentionPrecision.metadataKey)
+        )
+        if self.attentionPrecision == .single {
+            debug("Attention in single precision for \(path)")
+        }
     }
 
     deinit {
         llama_model_free(self.model)
     }
 
+    /// The value of a metadata key of the GGUF, nil when the GGUF has no such key
+    private static func metadataValue(_ model: OpaquePointer, key: String) -> String? {
+        var buffer = [CChar](repeating: 0, count: 64)
+        let length = Int(llama_model_meta_val_str(model, key, &buffer, buffer.count))
+        guard 0 <= length, length < buffer.count else {
+            return nil
+        }
+        return String(bytes: buffer[..<length].map { UInt8(bitPattern: $0) }, encoding: .utf8)
+    }
+
     let model: OpaquePointer
     let vocab: OpaquePointer
+    let attentionPrecision: ZenzAttentionPrecision
+}
+
+/// The precision a model needs for its attention scores. Flash attention computes them in half precision, and so does
+/// the CPU from a half precision K/V cache, while some models' scores exceed its range: genmai, a fine-tune of
+/// zenz-v2.5-medium, has scores near 3.5M in one layer, which overflow into wrong conversions without any error. The
+/// GGUF of such a model asks for single precision with the metadata key `zenzai.attention.precision` = `f32`
+enum ZenzAttentionPrecision: Equatable {
+    /// Flash attention, with the K/V cache in half precision
+    case half
+    /// No flash attention, so the GPU multiplies the K/V cache into single precision; on the CPU, which would multiply
+    /// a half precision cache in half precision, the K/V cache in single precision too
+    case single
+
+    static let metadataKey = "zenzai.attention.precision"
+
+    init(metadataValue: String?) {
+        self = metadataValue == "f32" ? .single : .half
+    }
 }
 
 /// 同時に強参照するモデルを1個に制限する、プロセス共通のモデルキャッシュ。
@@ -361,17 +396,23 @@ final class ZenzContext {
         llama_free(context)
     }
 
-    private static var ctx_params: llama_context_params {
+    static func ctx_params(attentionPrecision: ZenzAttentionPrecision) -> llama_context_params {
         let n_threads = self.inferenceThreadCount
         debug("Using \(n_threads) threads")
         var ctx_params = llama_context_default_params()
         ctx_params.n_ctx = 512
-        ctx_params.flash_attn = true
+        ctx_params.flash_attn = attentionPrecision == .half
         ctx_params.n_threads       = Int32(n_threads)
         ctx_params.n_threads_batch = Int32(n_threads)
         ctx_params.n_batch = 512
         #if Zenzai || ZenzaiCPU
         ctx_params.n_ubatch = 64
+        #endif
+        #if ZenzaiCPU
+        if attentionPrecision == .single {
+            ctx_params.type_k = GGML_TYPE_F32
+            ctx_params.type_v = GGML_TYPE_F32
+        }
         #endif
         // 推論時間は呼び出し側で計測する。llama.cpp内部の統計更新は不要。
         ctx_params.no_perf = true
@@ -432,7 +473,7 @@ final class ZenzContext {
 
     static func createContext(path: String) throws -> ZenzContext {
         let sharedModel = try SharedZenzModelCache.shared.model(path: path)
-        var params = ctx_params
+        var params = ctx_params(attentionPrecision: sharedModel.attentionPrecision)
         #if ZenzaiCPU
         // CPU 専用: KV / KQV 等の GPU オフロードを完全に無効化
         params.offload_kqv = false
@@ -448,7 +489,7 @@ final class ZenzContext {
 
     func resetContext() throws {
         llama_free(self.context)
-        var params = Self.ctx_params
+        var params = Self.ctx_params(attentionPrecision: self.sharedModel.attentionPrecision)
         #if ZenzaiCPU
         params.offload_kqv = false
         #endif

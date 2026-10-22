@@ -12,6 +12,14 @@ package final class DicdataStoreState {
     var learningMemoryManager: LearningManager
 
     var userDictionaryURL: URL?
+    /// A dictionary the app ships to supplement the bundled one with words it lacks, read like the user dictionary
+    /// but without its special treatment (see `DicdataElementMetadata.isFromSupplementaryDictionary`)
+    var supplementaryDictionaryURL: URL?
+    private(set) var supplementaryDictionaryHasLoaded: Bool = false
+    private(set) var supplementaryDictionaryLOUDS: LOUDS?
+    /// Where the loaded trie came from: it stays loaded while requests without the dictionary alternate with ones
+    /// with it (sessions share the converter), and only another dictionary replaces it
+    private(set) var loadedSupplementaryDictionaryURL: URL?
     var memoryURL: URL? {
         self.learningMemoryManager.config.memoryURL
     }
@@ -36,6 +44,16 @@ package final class DicdataStoreState {
             self.userShortcutsLOUDS = nil
             self.userShortcutsHasLoaded = false
         }
+    }
+
+    func updateSupplementaryDictionaryURL(_ newURL: URL?) {
+        self.supplementaryDictionaryURL = newURL
+    }
+
+    func updateSupplementaryDictionaryLOUDS(_ newLOUDS: LOUDS?, for url: URL) {
+        self.supplementaryDictionaryLOUDS = newLOUDS
+        self.supplementaryDictionaryHasLoaded = true
+        self.loadedSupplementaryDictionaryURL = url
     }
 
     func updateKeyboardLanguage(_ newLanguage: KeyboardLanguage) {
@@ -73,6 +91,7 @@ package final class DicdataStoreState {
             self.keyboardLanguage = options.keyboardLanguage
         }
         self.updateUserDictionaryURL(options.sharedContainerURL, forceReload: false)
+        self.updateSupplementaryDictionaryURL(options.supplementaryDictionaryURL)
         let learningConfig = LearningConfig(learningType: options.learningType, maxMemoryCount: options.maxMemoryCount, memoryURL: options.memoryDirectoryURL)
         self.updateLearningConfig(learningConfig)
     }

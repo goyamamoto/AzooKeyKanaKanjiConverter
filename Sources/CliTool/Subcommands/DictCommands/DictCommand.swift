@@ -7,7 +7,7 @@ extension Subcommands {
         static let configuration = CommandConfiguration(
             commandName: "dict",
             abstract: "Show dict information",
-            subcommands: [Self.Read.self, Self.Build.self]
+            subcommands: [Self.Read.self, Self.Build.self, Self.Supplement.self, Self.Rendaku.self]
         )
     }
 }

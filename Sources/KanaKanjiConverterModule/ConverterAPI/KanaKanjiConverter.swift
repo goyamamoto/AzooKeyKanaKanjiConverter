@@ -66,9 +66,14 @@ public final class KanaKanjiConverter {
     private var activeSessionID = KanaKanjiConverter.defaultSessionID
     /// Zenzaiのためのzenzモデル
     private var zenz: Zenz?
+    /// A zenz model that scores inputs (see `zenzaiInputLogProbability`) when it is not the conversion's
+    private var scoringZenz: Zenz?
     /// 完全な入力・文脈・制約をキーにする純粋なメモ化結果。
     /// compositionではなく、このConverterインスタンスの寿命に紐づける。
     var zenzaiMemoizationCache = ZenzaiMemoizationCache()
+    /// The second model's own memoization (its prompt tokens and evaluations differ from the conversion model's)
+    private var secondOpinionMemoizationCache = ZenzaiMemoizationCache()
+    private var secondOpinionModelURL: URL?
     private var zenzaiPersonalization: (mode: ConvertRequestOptions.ZenzaiMode.PersonalizationMode, base: EfficientNGram, personal: EfficientNGram)?
     public private(set) var zenzStatus: String = ""
     private var dicdataStoreState: DicdataStoreState
@@ -91,6 +96,20 @@ public final class KanaKanjiConverter {
         let sessionID = ConversionSessionID(rawValue: UUID().uuidString)
         self.sessions[sessionID] = .init()
         return sessionID
+    }
+
+    /// Creates a session that starts with a copy of the conversion state of `sessionID`: a conversion tried in the copy
+    /// leaves `sessionID` to go on from where it was. Remove the copy with `removeSession` when done.
+    ///
+    /// The copy shares the lattice nodes and the typo and n-gram caches with `sessionID`, as `withScratchSession` does;
+    /// the nodes' search state is reset whenever a conversion takes them up again.
+    public func copySession(_ sessionID: ConversionSessionID) throws -> ConversionSessionID {
+        guard let state = self.sessions[sessionID] else {
+            throw ConversionSessionError.unknownSession(sessionID)
+        }
+        let copyID = ConversionSessionID(rawValue: "copy-\(UUID().uuidString)")
+        self.sessions[copyID] = state
+        return copyID
     }
 
     /// 作成済みの変換セッションを破棄します。
@@ -264,7 +283,15 @@ public final class KanaKanjiConverter {
             return model
         } else {
             do {
-                self.zenz = try Zenz.shared(resourceURL: modelURL)
+                // The model that scores inputs on the side, when it is this one: loading it again would hold two copies
+                if let model = self.scoringZenz, model.resourceURL == modelURL {
+                    self.zenz = model
+                    self.scoringZenz = nil
+                    // The process cache would keep the model converted with until now
+                    model.share()
+                } else {
+                    self.zenz = try Zenz.shared(resourceURL: modelURL)
+                }
                 self.purgeZenzaiMemoizationCache()
                 self.sessions = self.sessions.mapValues { state in
                     let next = state
@@ -278,6 +305,35 @@ public final class KanaKanjiConverter {
                 return nil
             }
         }
+    }
+
+    /// The second model of a thorough conversion with its weight and memoization (see `ZenzaiMode.SecondOpinion`), when it
+    /// is another model than the conversion's. It is the scoring model (see `getScoringModel`), so a model held for scoring
+    /// inputs serves here too
+    private func getSecondOpinion(_ zenzaiMode: ConvertRequestOptions.ZenzaiMode) -> Kana2Kanji.SecondOpinion? {
+        guard zenzaiMode.thorough, let opinion = zenzaiMode.secondOpinion, opinion.weightURL != zenzaiMode.weightURL,
+              let model = self.getScoringModel(modelURL: opinion.weightURL) else {
+            return nil
+        }
+        if self.secondOpinionModelURL != opinion.weightURL {
+            self.secondOpinionMemoizationCache = .init()
+            self.secondOpinionModelURL = opinion.weightURL
+        }
+        return Kana2Kanji.SecondOpinion(model: model, weight: opinion.weight, threshold: opinion.threshold, memoizationCache: self.secondOpinionMemoizationCache)
+    }
+
+    /// The model at `modelURL` for scoring inputs (see `zenzaiInputLogProbability`): the conversion's when it is that
+    /// model, else one held for scoring alone, so the conversion keeps its model and its caches
+    package func getScoringModel(modelURL: URL) -> Zenz? {
+        if let model = self.zenz, model.resourceURL == modelURL {
+            self.scoringZenz = nil
+            return model
+        }
+        if let model = self.scoringZenz, model.resourceURL == modelURL {
+            return model
+        }
+        self.scoringZenz = try? Zenz.shared(resourceURL: modelURL)
+        return self.scoringZenz
     }
 
     package func predictNextInputText(
@@ -1219,6 +1275,8 @@ public final class KanaKanjiConverter {
                 zenzaiMemoizationCache: self.zenzaiMemoizationCache,
                 inferenceLimit: zenzaiMode.inferenceLimit,
                 requestRichCandidates: zenzaiMode.requestRichCandidates,
+                thorough: zenzaiMode.thorough,
+                secondOpinion: self.getSecondOpinion(zenzaiMode),
                 personalizationMode: self.getZenzaiPersonalization(mode: zenzaiMode.personalizationMode),
                 versionDependentConfig: zenzaiMode.versionDependentMode,
                 dicdataStoreState: self.dicdataStoreState

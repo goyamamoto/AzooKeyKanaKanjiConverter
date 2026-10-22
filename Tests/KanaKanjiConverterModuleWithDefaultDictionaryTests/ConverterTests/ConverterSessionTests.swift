@@ -53,6 +53,29 @@ final class ConverterSessionTests: XCTestCase {
         XCTAssertNoThrow(try converter.withSession(innerSession) {})
     }
 
+    func testConversionInCopiedSessionLeavesOriginal() throws {
+        let converter = KanaKanjiConverter.withDefaultDictionary()
+        let session = converter.createSession()
+        let control = converter.createSession()
+        func convert(_ text: String) -> [String] {
+            var composingText = ComposingText()
+            composingText.insertAtCursorPosition(text, inputStyle: .direct)
+            return converter.requestCandidates(composingText, options: requestOptions()).mainResults.prefix(5).map(\.text)
+        }
+        for id in [session, control] {
+            _ = try converter.withSession(id) { convert("かんじへんかん") }
+        }
+        let copy = try converter.copySession(session)
+        _ = try converter.withSession(copy) { convert("まったくちがうにゅうりょく") }
+        converter.removeSession(copy)
+
+        let afterCopy = try converter.withSession(session) { convert("かんじへんかんは") }
+        let withoutCopy = try converter.withSession(control) { convert("かんじへんかんは") }
+        XCTAssertEqual(afterCopy, withoutCopy)
+        XCTAssertThrowsError(try converter.withSession(copy) {})
+        XCTAssertThrowsError(try converter.copySession(copy))
+    }
+
     private func requestOptions() -> ConvertRequestOptions {
         ConvertRequestOptions(
             N_best: 10,

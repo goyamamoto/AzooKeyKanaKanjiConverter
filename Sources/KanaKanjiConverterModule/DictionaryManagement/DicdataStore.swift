@@ -25,6 +25,19 @@ public final class DicdataStore {
     private var importedLoudses: Set<String> = []
     private var charsID: [Character: UInt8] = [:]
 
+    /// ひらがな・カタカナ（長音符を含む）だけの表記か
+    static func isWrittenInKana(_ word: String) -> Bool {
+        word.unicodeScalars.allSatisfy { (0x3041 ... 0x309F).contains($0.value) || (0x30A0 ... 0x30FF).contains($0.value) }
+    }
+    /// 連濁した語頭のかなから、濁る前のかなへ
+    package static let voicelessOf: [Character: Character] = [
+        "ガ": "カ", "ギ": "キ", "グ": "ク", "ゲ": "ケ", "ゴ": "コ", "ザ": "サ", "ジ": "シ", "ズ": "ス", "ゼ": "セ", "ゾ": "ソ",
+        "ダ": "タ", "ヂ": "チ", "ヅ": "ツ", "デ": "テ", "ド": "ト", "バ": "ハ", "ビ": "ヒ", "ブ": "フ", "ベ": "ヘ", "ボ": "ホ"
+    ]
+    /// 連濁の読みで探す辞書の、探索状態を分けるための鍵の頭
+    static let rendakuKeyPrefix = "\u{0}"
+    /// 連濁で読んだ語の値の補正（log10 で万分の一）: 元の読みの語より使われにくいが、モデルの制約で選べる程度に
+    static let rendakuPenalty: PValue = -4
     /// 辞書のエントリの最大長さ
     ///  - TODO: make this value as an option
     public let maxlength: Int = 20
@@ -159,6 +172,17 @@ public final class DicdataStore {
                 state.updateUserShortcutsLOUDS(nil)
                 debug("Error: ユーザショートカット辞書のloudsファイルの読み込みに失敗しましたが、このエラーは深刻ではありません。")
             }
+        }
+        if query == "supplement" {
+            guard let url = state.supplementaryDictionaryURL else {
+                return nil
+            }
+            if state.supplementaryDictionaryHasLoaded, state.loadedSupplementaryDictionaryURL == url {
+                return state.supplementaryDictionaryLOUDS
+            }
+            let louds = LOUDS.loadSupplementaryDictionary(url: url)
+            state.updateSupplementaryDictionaryLOUDS(louds, for: url)
+            return louds
         }
         if query == "memory" {
             if state.memoryHasLoaded {
@@ -301,7 +325,8 @@ public final class DicdataStore {
     ) -> (
         stringToInfo: [[Character]: (endIndex: Lattice.LatticeIndex, penalty: PValue)],
         indices: [(key: String, indices: [Int])],
-        temporaryMemoryDicdata: [DicdataElement]
+        temporaryMemoryDicdata: [DicdataElement],
+        rendakuOriginals: [[Character]: [Character]]
     ) {
         var generator = UnifiedGenerator()
         if let surfaceProcessRange {
@@ -321,6 +346,10 @@ public final class DicdataStore {
         }
         var targetLOUDS: [String: LOUDS.MovingTowardPrefixSearchHelper] = [:]
         var stringToInfo: [([Character], (endIndex: Lattice.LatticeIndex, penalty: PValue))] = []
+        // 連濁で探した読み（清音）から、打たれた読み（濁音）へ
+        var rendakuOriginals: [[Character]: [Character]] = [:]
+        // 文頭の語は連濁しない
+        let spanStart = surfaceProcessRange?.leftIndex ?? inputProcessRange?.leftIndex ?? 0
         // 動的辞書（一時学習データ、動的ユーザ辞書）から取り出されたデータ
         var dynamicDicdata: [Int: [DicdataElement]] = [:]
         // ジェネレータを舐める
@@ -329,10 +358,13 @@ public final class DicdataStore {
                 continue
             }
             let charIDs = characters.map(self.character2charId(_:))
-            let keys: [String] = if useMemory {
+            var keys: [String] = if useMemory {
                 [String(firstCharacter), "user", "memory"]
             } else {
                 [String(firstCharacter), "user"]
+            }
+            if state.supplementaryDictionaryURL != nil {
+                keys.append("supplement")
             }
             var updated = false
             var availableMaxIndex = 0
@@ -347,6 +379,29 @@ public final class DicdataStore {
                     let result = helper!.update(target: charIDs)
                     updated = updated || result.updated
                     availableMaxIndex = max(availableMaxIndex, result.availableMaxIndex)
+                }
+            }
+            // 連濁: 文の途中で始まり濁音で始まる語は、清音の読みの語も探す（夜+駆け → 夜駆け）。見つかった語のうち、辞書が複合語の
+            // 後部要素として濁った形を持つ語（`RendakuData`）だけを打たれた読みで格子に載せ、値を下げる（`lookupDicdata` の
+            // `rendakuPenalty`）
+            if spanStart > 0, let voiceless = Self.voicelessOf[firstCharacter] {
+                let variant = [voiceless] + Array(characters.dropFirst())
+                let variantIDs = variant.map(self.character2charId(_:))
+                var variantUpdated = false
+                for key in [String(voiceless)] + keys.dropFirst() {
+                    withMutableValue(&targetLOUDS[Self.rendakuKeyPrefix + key]) { helper in
+                        if helper == nil, let louds = self.loadLOUDS(query: key, state: state) {
+                            helper = LOUDS.MovingTowardPrefixSearchHelper(louds: louds)
+                        }
+                        guard helper != nil else {
+                            return
+                        }
+                        variantUpdated = helper!.update(target: variantIDs).updated || variantUpdated
+                    }
+                }
+                if variantUpdated {
+                    stringToInfo.append((variant, info))
+                    rendakuOriginals[variant] = Array(characters)
                 }
             }
             // 短期記憶についてはこの位置で処理する
@@ -414,11 +469,15 @@ public final class DicdataStore {
                 }
             ),
             targetLOUDS.map {
-                ($0.key, $0.value.indicesInDepth(depth: minCount - 1 ..< .max))
+                (
+                    $0.key.hasPrefix(Self.rendakuKeyPrefix) ? String($0.key.dropFirst(Self.rendakuKeyPrefix.count)) : $0.key,
+                    $0.value.indicesInDepth(depth: minCount - 1 ..< .max)
+                )
             },
             dynamicDicdata.flatMap {
                 minCount < $0.key + 1 ? $0.value : []
-            }
+            },
+            rendakuOriginals
         )
     }
     /// prefixを起点として、それに続く語（prefix match）をLOUDS上で探索する関数。
@@ -468,6 +527,26 @@ public final class DicdataStore {
             }
             data.mutatingForEach {
                 $0.metadata = .isFromUserDictionary
+            }
+        }
+        if identifier == "supplement", let url = state.supplementaryDictionaryURL {
+            for (key, value) in dict {
+                let fileID = "\(identifier)\(key)"
+                // Cached by file, so another supplementary dictionary at another place is not confused with this one
+                let cacheKey = "\(fileID)@\(url.path)"
+                if self.loudstxts[cacheKey] == nil,
+                   let binary = try? Data(contentsOf: url.appendingPathComponent("\(fileID).loudstxt3", isDirectory: false), options: [.mappedIfSafe]) {
+                    self.loudstxts[cacheKey] = binary
+                }
+                data.append(contentsOf: LOUDS.getSupplementaryDictionaryDataForLoudstxt3(
+                    fileID,
+                    indices: value.map { $0 & DictionaryBuilder.localMask },
+                    cache: self.loudstxts[cacheKey],
+                    url: url
+                ))
+            }
+            data.mutatingForEach {
+                $0.metadata = .isFromSupplementaryDictionary
             }
         }
         if identifier == "memory", let memoryURL = state.memoryURL {
@@ -581,7 +660,7 @@ public final class DicdataStore {
         }
 
         // MARK: 誤り訂正の対象を列挙する。非常に重い処理。
-        let (stringToInfo, indices, additionalDicdata) = self.movingTowardPrefixSearch(
+        let (stringToInfo, indices, additionalDicdata, rendakuOriginals) = self.movingTowardPrefixSearch(
             composingText: composingText,
             inputProcessRange: inputProcessRange,
             surfaceProcessRange: surfaceProcessRange,
@@ -608,6 +687,26 @@ public final class DicdataStore {
             for element in consume items {
                 let rubyArray = Array(element.ruby)
                 guard let info = stringToInfo[rubyArray] else {
+                    continue
+                }
+                if let original = rendakuOriginals[rubyArray] {
+                    // 連濁で読んだ語: 辞書が複合語の後部要素として濁った形を持つ語（寺: 山寺、駆け: 先駆け）に限る。記事 や 冬 は濁らない。
+                    // かな書きの語（表記が清音の読みそのもの）も除く。打たれた読みに戻し、値を下げ、濁った読みのまま学習されないようにする
+                    guard RendakuData.latterElements.contains(element.word + "\t" + element.ruby), !Self.isWrittenInKana(element.word) else {
+                        continue
+                    }
+                    var voiced = DicdataElement(
+                        word: element.word,
+                        ruby: String(original),
+                        lcid: element.lcid,
+                        rcid: element.rcid,
+                        mid: element.mid,
+                        value: element.value() + Self.rendakuPenalty
+                    )
+                    voiced.metadata = element.metadata.union(.isNotLearningTarget)
+                    if let voiced = penaltizedElementIfFeasible(voiced, rubyCount: rubyArray.count, penalty: info.penalty) {
+                        appendNode(voiced, endIndex: info.endIndex)
+                    }
                     continue
                 }
                 if let element = penaltizedElementIfFeasible(consume element, rubyCount: rubyArray.count, penalty: info.penalty) {

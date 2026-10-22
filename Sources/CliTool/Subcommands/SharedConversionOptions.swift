@@ -27,6 +27,8 @@ struct SharedConversionOptions: ParsableArguments {
     var roman2kana = false
     @Option(name: [.customLong("config_user_dictionary")], help: "User Dictionary JSON file path")
     var configUserDictionary: String?
+    @Option(name: [.customLong("config_supplement")], help: "Directory of a supplementary dictionary (supplement.louds and the files with it).")
+    var configSupplementaryDictionary: String?
     @Option(name: [.customLong("config_zenzai_inference_limit")], help: "inference limit for zenzai.")
     var configZenzaiInferenceLimit: Int = .max
     @Flag(name: [.customLong("config_zenzai_rich_n_best")], help: "enable rich n_best generation for zenzai.")
@@ -106,6 +108,7 @@ struct SharedConversionOptions: ParsableArguments {
             zenzaiMode: try self.makeZenzaiMode(versionDependentMode: self.makeDefaultVersionDependentMode()),
             experimentalZenzaiPredictiveInput: self.experimentalZenzaiPredictiveInput,
             typoCorrectionMode: typoMode,
+            supplementaryDictionaryURL: self.configSupplementaryDictionary.map { URL(fileURLWithPath: $0, isDirectory: true) },
             metadata: .init(versionString: "anco for debugging")
         )
         if self.onlyWholeConversion {

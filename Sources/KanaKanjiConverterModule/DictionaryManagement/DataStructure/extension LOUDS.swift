@@ -73,6 +73,14 @@ extension LOUDS {
         return load(charsURL: charsURL, loudsURL: loudsURL)
     }
 
+    package static func loadSupplementaryDictionary(url: URL) -> LOUDS? {
+        let (charsURL, loudsURL) = (
+            url.appending(path: "supplement.loudschars2", directoryHint: .notDirectory),
+            url.appending(path: "supplement.louds", directoryHint: .notDirectory)
+        )
+        return load(charsURL: charsURL, loudsURL: loudsURL)
+    }
+
     package static func loadUserShortcuts(userDictionaryURL: URL) -> LOUDS? {
         let (charsURL, loudsURL) = (
             userDictionaryURL.appending(path: "user_shortcuts.loudschars2", directoryHint: .notDirectory),
@@ -167,6 +175,19 @@ extension LOUDS {
         do {
             let url = userDictionaryURL.appendingPathComponent("\(identifier).loudstxt3", isDirectory: false)
             return Self.parseLoudstxt3Binary(binary: try Data(contentsOf: url), indices: indices)
+        } catch {
+            debug(#function, error)
+            return []
+        }
+    }
+
+    static func getSupplementaryDictionaryDataForLoudstxt3(_ identifier: String, indices: [Int], cache: Data? = nil, url: URL) -> [DicdataElement] {
+        if let cache {
+            return Self.parseLoudstxt3Binary(binary: cache, indices: indices)
+        }
+        do {
+            let fileURL = url.appendingPathComponent("\(identifier).loudstxt3", isDirectory: false)
+            return Self.parseLoudstxt3Binary(binary: try Data(contentsOf: fileURL, options: [.mappedIfSafe]), indices: indices)
         } catch {
             debug(#function, error)
             return []

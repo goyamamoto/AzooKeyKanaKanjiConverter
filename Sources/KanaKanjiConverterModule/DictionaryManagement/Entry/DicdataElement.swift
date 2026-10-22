@@ -107,4 +107,6 @@ public struct DicdataElementMetadata: OptionSet, Sendable, Hashable, Equatable {
     /// この語は学習に記憶されず、前後の語と組み合わせた文節 bigram や全体の学習からも外れ、確定の前後をまたぐ学習の
     /// 「直前の語」にもならない
     public static let isNotLearningTarget = DicdataElementMetadata(rawValue: 1 << 2) // 4
+    /// 補助辞書（内蔵辞書にない語を補うためにアプリが同梱する辞書）から得られた候補にはこのフラグを立てる
+    public static let isFromSupplementaryDictionary = DicdataElementMetadata(rawValue: 1 << 3) // 8
 }

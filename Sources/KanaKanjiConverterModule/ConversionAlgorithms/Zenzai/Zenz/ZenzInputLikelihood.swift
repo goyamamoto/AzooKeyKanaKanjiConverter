@@ -46,8 +46,9 @@ enum ZenzInputLikelihood {
 extension KanaKanjiConverter {
     /// The log-probability Zenzai gives `input` (a reading in katakana, with letters typed as letters) after
     /// `leftSideContext`: how likely the model finds the reading itself, to compare readings of the same keys (token as
-    /// letters, or とけん). Nil without the model
+    /// letters, or とけん). Nil without the model. The model may be another than the conversion's: it then scores on the
+    /// side, and the conversion keeps its model and its caches
     public func zenzaiInputLogProbability(_ input: String, leftSideContext: String = "", modelURL: URL) -> Float? {
-        self.getModel(modelURL: modelURL)?.inputLogProbability(input, leftSideContext: leftSideContext)
+        self.getScoringModel(modelURL: modelURL)?.inputLogProbability(input, leftSideContext: leftSideContext)
     }
 }
