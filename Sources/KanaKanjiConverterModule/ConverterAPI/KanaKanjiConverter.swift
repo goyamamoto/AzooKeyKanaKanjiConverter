@@ -1279,7 +1279,8 @@ public final class KanaKanjiConverter {
                 secondOpinion: self.getSecondOpinion(zenzaiMode),
                 personalizationMode: self.getZenzaiPersonalization(mode: zenzaiMode.personalizationMode),
                 versionDependentConfig: zenzaiMode.versionDependentMode,
-                dicdataStoreState: self.dicdataStoreState
+                dicdataStoreState: self.dicdataStoreState,
+                cancellation: zenzaiMode.cancellation
             )
             self.updateCurrentSessionState {
                 $0.previousInputData = inputData

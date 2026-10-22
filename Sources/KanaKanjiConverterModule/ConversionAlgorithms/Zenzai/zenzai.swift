@@ -218,7 +218,8 @@ extension Kana2Kanji {
         secondOpinion: SecondOpinion? = nil,
         personalizationMode: (mode: ConvertRequestOptions.ZenzaiMode.PersonalizationMode, base: EfficientNGram, personal: EfficientNGram)?,
         versionDependentConfig: ConvertRequestOptions.ZenzaiVersionDependentMode,
-        dicdataStoreState: DicdataStoreState
+        dicdataStoreState: DicdataStoreState,
+        cancellation: ConvertRequestOptions.ZenzaiMode.Cancellation? = nil
     ) -> (result: LatticeNode, lattice: Lattice, cache: ZenzaiCache) {
         let latticeInputData = Self.zenzaiLatticeInputData(for: inputData)
         let zenzInputCursorPosition = Self.zenzaiInputCursorPosition(for: inputData)
@@ -334,7 +335,7 @@ extension Kana2Kanji {
                 return fallback
             }
             var ranked = evaluated.sorted { $0.total > $1.total }
-            if let secondOpinion {
+            if let secondOpinion, cancellation?.isCancelled != true {
                 // The second model scores the likeliest few as wholes. Those it prefers to the first model's choice by at
                 // least the threshold are weighed against it by A + λ·B; a smaller preference is not heard, as the
                 // second model is the weaker one. The context is the conversion model's prompt, shared
@@ -395,8 +396,13 @@ extension Kana2Kanji {
             }
             return (found.result.prevs[best], candidates[best])
         }
-        /// Asks the model about `candidate`, counting the inference
+        /// Asks the model about `candidate`, counting the inference. Once the conversion is called off (see `cancellation`),
+        /// no inference is left and the candidate passes unasked
         func evaluating(_ candidate: Candidate, constraint: PrefixConstraint, rich: Bool) -> CandidateEvaluationResult {
+            if cancellation?.isCancelled == true {
+                inferenceLimit = 0
+                return .pass(score: 0, alternativeConstraints: [], likelihood: nil)
+            }
             inferenceLimit -= 1
             return zenz.candidateEvaluate(
                 convertTarget: inputData.convertTarget,

@@ -248,6 +248,28 @@ public struct ConvertRequestOptions: Sendable {
             var weight: Float
             var threshold: Float
         }
+        /// Calls off a conversion while it runs, from another thread: before each inference the model has yet to make,
+        /// Zenzai checks it and, once it is called off, goes on as when the inference limit is reached, with no more
+        /// inferences. For a conversion whose result is no longer wanted (a thorough conversion of an input typed on),
+        /// so that the next one starts sooner
+        public final class Cancellation: @unchecked Sendable, Equatable {
+            private let lock = NSLock()
+            private var cancelled = false
+
+            public init() {}
+
+            public func cancel() {
+                self.lock.withLock { self.cancelled = true }
+            }
+
+            public var isCancelled: Bool {
+                self.lock.withLock { self.cancelled }
+            }
+
+            public static func == (lhs: Cancellation, rhs: Cancellation) -> Bool {
+                lhs === rhs
+            }
+        }
         public static let off = ZenzaiMode(
             enabled: false,
             weightURL: URL(fileURLWithPath: ""),
@@ -264,7 +286,8 @@ public struct ConvertRequestOptions: Sendable {
         ///    - personalizationMode: values for personalization.
         ///    - versionDependentMode: specify zenz model version and its configuration.
         ///    - thorough: when this flag is true, the conversion is for committing: it starts over from the dictionary's conversion, weighs the model's other readings and the word it would go on with, and takes the most probable. Slower than live conversion.
-        public static func on(weight: URL, inferenceLimit: Int = 10, requestRichCandidates: Bool = false, thorough: Bool = false, secondOpinion: SecondOpinion? = nil, personalizationMode: PersonalizationMode?, versionDependentMode: ZenzaiVersionDependentMode = .v3(.init())) -> Self {
+        ///    - cancellation: calls the conversion off while it runs (see `Cancellation`).
+        public static func on(weight: URL, inferenceLimit: Int = 10, requestRichCandidates: Bool = false, thorough: Bool = false, secondOpinion: SecondOpinion? = nil, personalizationMode: PersonalizationMode?, versionDependentMode: ZenzaiVersionDependentMode = .v3(.init()), cancellation: Cancellation? = nil) -> Self {
             ZenzaiMode(
                 enabled: true,
                 weightURL: weight,
@@ -273,7 +296,8 @@ public struct ConvertRequestOptions: Sendable {
                 thorough: thorough,
                 secondOpinion: secondOpinion,
                 personalizationMode: personalizationMode,
-                versionDependentMode: versionDependentMode
+                versionDependentMode: versionDependentMode,
+                cancellation: cancellation
             )
         }
         var enabled: Bool
@@ -284,5 +308,6 @@ public struct ConvertRequestOptions: Sendable {
         var secondOpinion: SecondOpinion?
         var personalizationMode: PersonalizationMode?
         var versionDependentMode: ZenzaiVersionDependentMode
+        var cancellation: Cancellation?
     }
 }
