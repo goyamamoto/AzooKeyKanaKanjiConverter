@@ -720,6 +720,21 @@ final class LearningManager {
         guard self.config.learningType.needUpdateMemory else {
             return
         }
+        // 学習の対象にしない語（`DicdataElementMetadata.isNotLearningTarget`）があれば、その語で区切り、前と後ろをそれぞれ
+        // 別に学習する。その語は単語としても、前後の語との bigram や全体の一部としても記憶しない
+        let all = data + updatePart
+        if let cut = all.firstIndex(where: { $0.metadata.contains(.isNotLearningTarget) }) {
+            let before = Array(all[..<cut])
+            let after = Array(all[(cut + 1)...])
+            if before.count > data.count {
+                self.update(data: Array(before.prefix(data.count)), updatePart: Array(before.dropFirst(data.count)))
+            }
+            let afterData = max(0, data.count - cut - 1)
+            if after.count > afterData {
+                self.update(data: Array(after.prefix(afterData)), updatePart: Array(after.dropFirst(afterData)))
+            }
+            return
+        }
         // 単語単位
         for datum in updatePart where DicdataStore.needWValueMemory(datum) {
             guard let chars = Self.keyToChars(datum.ruby, char2UInt8: char2UInt8) else {

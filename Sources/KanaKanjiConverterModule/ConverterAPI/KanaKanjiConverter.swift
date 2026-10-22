@@ -495,7 +495,13 @@ public final class KanaKanjiConverter {
     public func updateLearningData(_ candidate: Candidate) {
         self.dicdataStoreState.updateLearningData(candidate, with: self.currentSessionState.lastData)
         self.updateCurrentSessionState {
-            $0.lastData = candidate.data.last
+            // 学習しなかった候補や学習の対象にしない語（`DicdataElementMetadata.isNotLearningTarget`）は、次の確定の
+            // 「直前の語」にもしない
+            if candidate.isLearningTarget, let last = candidate.data.last, !last.metadata.contains(.isNotLearningTarget) {
+                $0.lastData = last
+            } else {
+                $0.lastData = nil
+            }
         }
     }
 

@@ -103,4 +103,8 @@ public struct DicdataElementMetadata: OptionSet, Sendable, Hashable, Equatable {
     public static let isLearned = DicdataElementMetadata(rawValue: 1 << 0) // 1
     /// ユーザ辞書から得られた候補にはこのフラグを立てる
     public static let isFromUserDictionary = DicdataElementMetadata(rawValue: 1 << 1) // 2
+    /// 学習の対象にしない語にはこのフラグを立てる。キー操作で作ったカタカナや英字など、変換の選択ではない語に使う。
+    /// この語は学習に記憶されず、前後の語と組み合わせた文節 bigram や全体の学習からも外れ、確定の前後をまたぐ学習の
+    /// 「直前の語」にもならない
+    public static let isNotLearningTarget = DicdataElementMetadata(rawValue: 1 << 2) // 4
 }
